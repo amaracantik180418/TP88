@@ -1356,3 +1356,100 @@ def resolve_run_status(registry: RunRegistry, run_id: str) -> str:
         recorded = r.epochs_recorded
         if recorded == 0:
             return ProximaRunStatus.PENDING
+        if recorded >= r.epoch_count:
+            return ProximaRunStatus.COMPLETED
+        return ProximaRunStatus.RUNNING
+    except TP88RunNotFoundError:
+        return ProximaRunStatus.FAILED
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA VERSION & CONSTANTS EXT
+# -----------------------------------------------------------------------------
+
+
+TP88_MAJOR = 8
+TP88_MINOR = 8
+TP88_NAME = "TP88"
+
+
+def tp88_version_string() -> str:
+    return f"{TP88_NAME} v{TP88_MAJOR}.{TP88_MINOR}"
+
+
+TP88_DEFAULT_VAL_SPLIT_PERCENT = 20
+TP88_DEFAULT_EARLY_STOP_PATIENCE = 15
+TP88_DEFAULT_EARLY_STOP_MIN_DELTA = 1e-4
+TP88_MAX_RUN_ID_LEN = 64
+
+
+# -----------------------------------------------------------------------------
+# WARMUP RUNNER & TIMING
+# -----------------------------------------------------------------------------
+
+
+def warmup_model(
+    model: Model,
+    dataset: Dataset,
+    batch_size: int,
+    warmup_batches: int,
+) -> None:
+    fd = dataset.feature_dim()
+    td = dataset.target_dim()
+    feat = [[0.0] * fd for _ in range(batch_size)]
+    tgt = [[0.0] * td for _ in range(batch_size)]
+    out = [[0.0] * td for _ in range(batch_size)]
+    for b in range(warmup_batches):
+        start = b * batch_size
+        length = min(batch_size, dataset.size() - start)
+        if length <= 0:
+            break
+        dataset.get_batch(start, length, feat, tgt)
+        model.forward(feat, out)
+
+
+class ProximaTiming:
+    def __init__(self) -> None:
+        self._start_ns = 0.0
+
+    def start(self) -> None:
+        self._start_ns = time.perf_counter_ns()
+
+    def elapsed_ns(self) -> int:
+        return time.perf_counter_ns() - int(self._start_ns)
+
+    def elapsed_ms(self) -> float:
+        return self.elapsed_ns() / 1e6
+
+
+# -----------------------------------------------------------------------------
+# BATCH SCHEDULER & LOSS RECORD
+# -----------------------------------------------------------------------------
+
+
+class ProximaBatchScheduler:
+    def __init__(self, total_batches: int, rng: random.Random) -> None:
+        self.total_batches = total_batches
+        self.order = list(range(total_batches))
+        rng.shuffle(self.order)
+        self._cursor = 0
+
+    def next_batch_index(self) -> int:
+        idx = self.order[self._cursor % self.total_batches]
+        self._cursor += 1
+        return idx
+
+    def reset(self) -> None:
+        self._cursor = 0
+
+
+@dataclass
+class ProximaLossRecord:
+    step: int
+    value: float
+    timestamp_ms: float
+
+
+class ProximaStepRecorder:
+    def __init__(self) -> None:
+        self.records: List[ProximaLossRecord] = []
