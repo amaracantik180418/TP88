@@ -1550,3 +1550,100 @@ def proxima_supported_losses() -> List[str]:
     return ["MSE", "CrossEntropy", "Huber"]
 
 
+def proxima_supported_optimizers() -> List[str]:
+    return ["SGD", "Adam", "RMSprop"]
+
+
+def proxima_max_epochs_limit() -> int:
+    return 50000
+
+
+def proxima_max_batch_size_limit() -> int:
+    return 8192
+
+
+def proxima_min_learning_rate() -> float:
+    return 1e-10
+
+
+def proxima_max_learning_rate() -> float:
+    return 10.0
+
+
+# -----------------------------------------------------------------------------
+# ARG PARSER EXT (for script usage)
+# -----------------------------------------------------------------------------
+
+
+class TP88ArgParser:
+    def __init__(self, args: Optional[List[str]] = None) -> None:
+        self._opts: Dict[str, str] = {}
+        args = args or []
+        i = 0
+        while i < len(args):
+            if args[i].startswith("--") and i + 1 < len(args):
+                key = args[i][2:]
+                self._opts[key] = args[i + 1]
+                i += 2
+            else:
+                i += 1
+
+    def get(self, key: str, default: str = "") -> str:
+        return self._opts.get(key, default)
+
+    def get_int(self, key: str, default: int = 0) -> int:
+        v = self._opts.get(key)
+        return int(v) if v is not None else default
+
+    def get_float(self, key: str, default: float = 0.0) -> float:
+        v = self._opts.get(key)
+        return float(v) if v is not None else default
+
+
+# -----------------------------------------------------------------------------
+# RUN WITH ARGS ENTRY (programmatic)
+# -----------------------------------------------------------------------------
+
+
+def run_with_args(args: Optional[List[str]] = None) -> None:
+    parser = TP88ArgParser(args)
+    max_epochs = parser.get_int("maxEpochs", 30)
+    batch_size = parser.get_int("batchSize", 16)
+    lr = parser.get_float("learningRate", 0.001)
+    registry = RunRegistry()
+    config = TrainingConfig(
+        max_epochs=max_epochs,
+        batch_size=batch_size,
+        learning_rate=lr,
+    )
+    ds = generate_synthetic_random(320, 4, 2, config.random_seed)
+    model = LinearModel(4, 2, random.Random(config.random_seed))
+    opt = create_optimizer("Adam", lr, model.param_count())
+    loss_fn = create_loss("MSE")
+    bot = TrainerBot(registry, config, loss_fn, opt, model, ds)
+    run_id = bot.start_run("cli_submitter")
+    bot.run_training(run_id)
+
+
+# -----------------------------------------------------------------------------
+# BOT FACTORY HELPERS
+# -----------------------------------------------------------------------------
+
+
+def create_trainer_bot(
+    registry: RunRegistry,
+    config: TrainingConfig,
+    dataset: Dataset,
+    model: Model,
+) -> TrainerBot:
+    loss_fn = create_loss(config.loss_name)
+    opt = create_optimizer(
+        config.optimizer_name,
+        config.learning_rate,
+        model.param_count(),
+    )
+    return TrainerBot(registry, config, loss_fn, opt, model, dataset)
+
+
+# -----------------------------------------------------------------------------
+# NUMERIC STABILITY
