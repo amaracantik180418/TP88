@@ -871,3 +871,100 @@ class EarlyStoppingHandler:
         self.min_delta = min_delta
         self.wait_count = 0
         self.best_loss = float("inf")
+
+    def should_stop(self, current_loss: float) -> bool:
+        if current_loss < self.best_loss - self.min_delta:
+            self.best_loss = current_loss
+            self.wait_count = 0
+            return False
+        self.wait_count += 1
+        return self.wait_count >= self.patience
+
+    def reset(self) -> None:
+        self.wait_count = 0
+        self.best_loss = float("inf")
+
+
+class ValidationEvaluator:
+    def __init__(self, model: Model, validation_set: Dataset, loss_fn: LossFunction) -> None:
+        self.model = model
+        self.validation_set = validation_set
+        self.loss_fn = loss_fn
+
+    def evaluate(self) -> float:
+        n = self.validation_set.size()
+        if n == 0:
+            return float("nan")
+        feat = [[0.0] * self.validation_set.feature_dim()]
+        tgt = [[0.0] * self.validation_set.target_dim()]
+        out = [[0.0] * self.validation_set.target_dim()]
+        total = 0.0
+        for i in range(n):
+            self.validation_set.get_batch(i, 1, feat, tgt)
+            self.model.forward(feat, out)
+            total += self.loss_fn.compute(out[0], tgt[0])
+        return total / n
+
+
+# -----------------------------------------------------------------------------
+# LOGGER
+# -----------------------------------------------------------------------------
+
+
+class TP88Logger:
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        self.lines: List[str] = []
+
+    def log(self, level: str, msg: str) -> None:
+        line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{self.run_id}] [{level}] {msg}"
+        self.lines.append(line)
+        print(line)
+
+    def info(self, msg: str) -> None:
+        self.log("INFO", msg)
+
+    def warn(self, msg: str) -> None:
+        self.log("WARN", msg)
+
+    def error(self, msg: str) -> None:
+        self.log("ERROR", msg)
+
+    def write_to_file(self, path: Union[str, Path]) -> None:
+        Path(path).write_text("\n".join(self.lines), encoding="utf-8")
+
+
+# -----------------------------------------------------------------------------
+# RUN COMPARATOR & METRICS AGGREGATOR
+# -----------------------------------------------------------------------------
+
+
+class RunComparator:
+    def __init__(self, registry: RunRegistry) -> None:
+        self.registry = registry
+
+    def get_best_run_by_loss(self, run_ids: List[str]) -> Optional[str]:
+        if not run_ids:
+            return None
+        best_id = run_ids[0]
+        best_loss = float("inf")
+        for rid in run_ids:
+            epochs = self.registry.get_epochs(rid)
+            if not epochs:
+                continue
+            last = epochs[-1].loss
+            if last < best_loss:
+                best_loss = last
+                best_id = rid
+        return best_id
+
+    def get_final_loss_per_run(self, run_ids: List[str]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for rid in run_ids:
+            epochs = self.registry.get_epochs(rid)
+            out[rid] = epochs[-1].loss if epochs else float("nan")
+        return out
+
+
+class MetricsAggregator:
+    def __init__(self) -> None:
