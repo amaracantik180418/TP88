@@ -677,3 +677,100 @@ class TrainerBot:
         n_samples = self.dataset.size()
         batch_count = (n_samples + batch_size - 1) // batch_size
         batch_features = [[0.0] * feature_dim for _ in range(batch_size)]
+        batch_targets = [[0.0] * target_dim for _ in range(batch_size)]
+        batch_output = [[0.0] * target_dim for _ in range(batch_size)]
+        output_grad = [[0.0] * target_dim for _ in range(batch_size)]
+        param_grad = [
+            [0.0] * (feature_dim + 1) for _ in range(target_dim)
+        ]
+        global_step = 0
+        for epoch in range(self.config.max_epochs):
+            t0 = time.perf_counter()
+            epoch_loss = 0.0
+            indices = (
+                self.dataset.shuffled_indices()
+                if isinstance(self.dataset, ArrayDataset)
+                else list(range(n_samples))
+            )
+            for b in range(batch_count):
+                start = b * batch_size
+                length = min(batch_size, n_samples - start)
+                if length <= 0:
+                    continue
+                for i in range(length):
+                    idx = indices[start + i]
+                    self.dataset.get_batch(
+                        idx, 1,
+                        [batch_features[i]],
+                        [batch_targets[i]],
+                    )
+                self.model.forward(batch_features, batch_output)
+                batch_loss = 0.0
+                for i in range(length):
+                    batch_loss += self.loss_fn.compute(batch_output[i], batch_targets[i])
+                    grad_out = [0.0] * target_dim
+                    self.loss_fn.gradient(batch_output[i], batch_targets[i], grad_out)
+                    output_grad[i][:] = grad_out
+                batch_loss /= length
+                epoch_loss += batch_loss
+                params = self.model.get_params()
+                self.model.backward(batch_features, output_grad, param_grad)
+                flat_grad = []
+                for row in param_grad:
+                    flat_grad.extend(row)
+                gradient_clip(flat_grad, self.gradient_clip_norm)
+                if gradient_norm(flat_grad) > self.gradient_clip_norm * 100:
+                    raise TP88GradientExplosionError(gradient_norm(flat_grad))
+                self.optimizer.step(params, flat_grad, global_step)
+                self.model.set_params(params)
+                global_step += 1
+            epoch_loss /= batch_count
+            loss_scaled = int(epoch_loss * TP88_LOSS_SCALE)
+            gradient_root = hash_for_root(self.model.get_params())
+            self.registry.record_epoch(run_id, epoch, loss_scaled, gradient_root)
+            if (epoch + 1) % self.config.checkpoint_every_epochs == 0:
+                buf = struct.pack(f"{self.model.param_count()}d", *self.model.get_params())
+                state_hash = hashlib.sha256(buf).digest()
+                self.registry.anchor_checkpoint(
+                    run_id,
+                    (epoch + 1) // self.config.checkpoint_every_epochs - 1,
+                    state_hash,
+                )
+            duration_ms = (time.perf_counter() - t0) * 1000
+            metrics = EpochMetrics(epoch, epoch_loss, duration_ms, batch_count)
+            if epoch % 10 == 0:
+                print(metrics)
+
+
+# -----------------------------------------------------------------------------
+# SYNTHETIC DATA
+# -----------------------------------------------------------------------------
+
+
+def generate_synthetic_linear(
+    num_samples: int,
+    feature_dim: int,
+    target_dim: int,
+    seed: int,
+) -> ArrayDataset:
+    rng = random.Random(seed)
+    w = [[rng.random() * 2 - 1 for _ in range(feature_dim + 1)] for _ in range(target_dim)]
+    features = [[rng.random() * 2 - 1 for _ in range(feature_dim)] for _ in range(num_samples)]
+    targets = []
+    for i in range(num_samples):
+        row = []
+        for o in range(target_dim):
+            s = w[o][feature_dim]
+            for j in range(feature_dim):
+                s += features[i][j] * w[o][j]
+            row.append(s + 0.1 * rng.gauss(0, 1))
+        targets.append(row)
+    return ArrayDataset(features, targets, rng.randint(0, 2**31))
+
+
+def generate_synthetic_random(
+    num_samples: int,
+    feature_dim: int,
+    target_dim: int,
+    seed: int,
+) -> ArrayDataset:
