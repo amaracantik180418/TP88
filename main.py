@@ -386,3 +386,100 @@ class AdamOptimizer(Optimizer):
         eps: float = 1e-8,
         param_len: int = 0,
     ) -> None:
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.m = [0.0] * param_len
+        self.v = [0.0] * param_len
+        self.t = 0
+
+    def step(
+        self,
+        params: List[float],
+        gradients: List[float],
+        step_index: int,
+    ) -> None:
+        self.t += 1
+        for i in range(len(params)):
+            g = gradients[i]
+            self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * g
+            self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * (g * g)
+            m_hat = self.m[i] / (1 - self.beta1 ** self.t)
+            v_hat = self.v[i] / (1 - self.beta2 ** self.t)
+            params[i] -= self.lr * m_hat / (math.sqrt(v_hat) + self.eps)
+
+    def name(self) -> str:
+        return "Adam"
+
+
+class RMSpropOptimizer(Optimizer):
+    def __init__(self, lr: float, decay: float = 0.99, param_len: int = 0) -> None:
+        self.lr = lr
+        self.decay = decay
+        self.cache = [0.0] * param_len
+
+    def step(
+        self,
+        params: List[float],
+        gradients: List[float],
+        step_index: int,
+    ) -> None:
+        for i in range(len(params)):
+            g = gradients[i]
+            self.cache[i] = self.decay * self.cache[i] + (1 - self.decay) * g * g
+            params[i] -= self.lr * g / (math.sqrt(self.cache[i]) + 1e-8)
+
+    def name(self) -> str:
+        return "RMSprop"
+
+
+# -----------------------------------------------------------------------------
+# GRADIENT UTILS
+# -----------------------------------------------------------------------------
+
+
+def gradient_norm(g: Sequence[float]) -> float:
+    return math.sqrt(sum(x * x for x in g))
+
+
+def gradient_clip(g: List[float], max_norm: float) -> None:
+    n = gradient_norm(g)
+    if n > max_norm and n > 0:
+        scale = max_norm / n
+        for i in range(len(g)):
+            g[i] *= scale
+
+
+def hash_for_root(gradient: Sequence[float]) -> bytes:
+    buf = struct.pack(f"{len(gradient)}d", *gradient)
+    return hashlib.sha256(buf).digest()
+
+
+# -----------------------------------------------------------------------------
+# DATASET
+# -----------------------------------------------------------------------------
+
+
+class Dataset:
+    def size(self) -> int:
+        raise NotImplementedError
+
+    def feature_dim(self) -> int:
+        raise NotImplementedError
+
+    def target_dim(self) -> int:
+        raise NotImplementedError
+
+    def get_batch(
+        self,
+        start_idx: int,
+        count: int,
+        features_out: List[List[float]],
+        targets_out: List[List[float]],
+    ) -> None:
+        raise NotImplementedError
+
+
+class ArrayDataset(Dataset):
+    def __init__(
