@@ -774,3 +774,100 @@ def generate_synthetic_random(
     target_dim: int,
     seed: int,
 ) -> ArrayDataset:
+    rng = random.Random(seed)
+    features = [[rng.random() for _ in range(feature_dim)] for _ in range(num_samples)]
+    targets = [[rng.random() for _ in range(target_dim)] for _ in range(num_samples)]
+    return ArrayDataset(features, targets, rng.randint(0, 2**31))
+
+
+# -----------------------------------------------------------------------------
+# CONFIG SERIALIZATION
+# -----------------------------------------------------------------------------
+
+
+def config_to_json(c: TrainingConfig) -> str:
+    return json.dumps({
+        "max_epochs": c.max_epochs,
+        "batch_size": c.batch_size,
+        "learning_rate": c.learning_rate,
+        "gradient_clip_norm": c.gradient_clip_norm,
+        "checkpoint_every_epochs": c.checkpoint_every_epochs,
+        "random_seed": c.random_seed,
+        "optimizer_name": c.optimizer_name,
+        "loss_name": c.loss_name,
+    })
+
+
+def config_from_json(s: str) -> TrainingConfig:
+    d = json.loads(s)
+    return TrainingConfig(
+        max_epochs=d.get("max_epochs", TP88_DEFAULT_EPOCHS),
+        batch_size=d.get("batch_size", TP88_DEFAULT_BATCH),
+        learning_rate=d.get("learning_rate", TP88_DEFAULT_LR),
+        gradient_clip_norm=d.get("gradient_clip_norm", TP88_GRADIENT_CLIP_NORM),
+        checkpoint_every_epochs=d.get("checkpoint_every_epochs", TP88_CHECKPOINT_EVERY),
+        random_seed=d.get("random_seed", TP88_SEED_BASE),
+        optimizer_name=d.get("optimizer_name", "Adam"),
+        loss_name=d.get("loss_name", "MSE"),
+    )
+
+
+# -----------------------------------------------------------------------------
+# RUN SUMMARY & EXPORT
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class RunSummary:
+    run_id: str
+    total_epochs: int
+    final_loss: float
+    checkpoints_anchored: int
+    duration_ms: float
+
+    @staticmethod
+    def from_registry(registry: RunRegistry, run_id: str) -> "RunSummary":
+        r = registry.get_run(run_id)
+        epochs = registry.get_epochs(run_id)
+        checkpoints = registry.get_checkpoints(run_id)
+        final_loss = epochs[-1].loss if epochs else float("nan")
+        start = r.registered_at
+        end = epochs[-1].recorded_at if epochs else start
+        return RunSummary(
+            run_id=run_id,
+            total_epochs=len(epochs),
+            final_loss=final_loss,
+            checkpoints_anchored=len(checkpoints),
+            duration_ms=(end - start) * 1000,
+        )
+
+
+def export_epochs_csv(registry: RunRegistry, run_id: str, path: Union[str, Path]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["epoch_index,loss_scaled,loss,recorded_at"]
+    for e in registry.get_epochs(run_id):
+        lines.append(f"{e.epoch_index},{e.loss_scaled},{e.loss:.10f},{e.recorded_at}")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def export_checkpoints_csv(registry: RunRegistry, run_id: str, path: Union[str, Path]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["checkpoint_index,anchored_at"]
+    for c in registry.get_checkpoints(run_id):
+        lines.append(f"{c.checkpoint_index},{c.anchored_at}")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# -----------------------------------------------------------------------------
+# EARLY STOPPING & VALIDATION
+# -----------------------------------------------------------------------------
+
+
+class EarlyStoppingHandler:
+    def __init__(self, patience: int = 15, min_delta: float = 1e-4) -> None:
+        self.patience = patience
+        self.min_delta = min_delta
+        self.wait_count = 0
+        self.best_loss = float("inf")
