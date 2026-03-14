@@ -192,3 +192,100 @@ class RunRegistry:
     ) -> None:
         r = self.get_run(run_id)
         if r.archived:
+            raise TP88CheckpointError("Run archived")
+        if epoch_index >= r.epoch_count:
+            raise TP88EpochIndexError(epoch_index, r.epoch_count)
+        if r.epochs_recorded != epoch_index:
+            raise TP88CheckpointError("Epoch order")
+        rec = EpochRecord(
+            run_id=run_id,
+            epoch_index=epoch_index,
+            loss_scaled=loss_scaled,
+            gradient_root=gradient_root or bytes(32),
+            recorded_at=time.time(),
+        )
+        self._epochs[run_id].append(rec)
+        r.epochs_recorded += 1
+
+    def anchor_checkpoint(
+        self,
+        run_id: str,
+        checkpoint_index: int,
+        state_hash: bytes,
+    ) -> None:
+        r = self.get_run(run_id)
+        if r.archived:
+            raise TP88CheckpointError("Run archived")
+        if checkpoint_index >= TP88_MAX_CHECKPOINTS:
+            raise TP88CheckpointError("Checkpoint index out of range")
+        rec = CheckpointRecord(
+            run_id=run_id,
+            checkpoint_index=checkpoint_index,
+            state_hash=state_hash or bytes(32),
+            anchored_at=time.time(),
+        )
+        self._checkpoints[run_id].append(rec)
+        r.checkpoints_anchored += 1
+
+    def archive_run(self, run_id: str) -> None:
+        self.get_run(run_id).archived = True
+
+    def get_epochs(self, run_id: str) -> List[EpochRecord]:
+        return list(self._epochs.get(run_id, []))
+
+    def get_checkpoints(self, run_id: str) -> List[CheckpointRecord]:
+        return list(self._checkpoints.get(run_id, []))
+
+    def get_all_run_ids(self) -> List[str]:
+        return list(self._run_id_order)
+
+    def total_runs(self) -> int:
+        return len(self._runs)
+
+
+# -----------------------------------------------------------------------------
+# LOSS FUNCTIONS
+# -----------------------------------------------------------------------------
+
+
+class LossFunction:
+    def compute(self, predicted: Sequence[float], target: Sequence[float]) -> float:
+        raise NotImplementedError
+
+    def gradient(
+        self,
+        predicted: Sequence[float],
+        target: Sequence[float],
+        gradient_out: List[float],
+    ) -> None:
+        raise NotImplementedError
+
+    def name(self) -> str:
+        return "Loss"
+
+
+class MSELoss(LossFunction):
+    def compute(self, predicted: Sequence[float], target: Sequence[float]) -> float:
+        n = len(predicted)
+        return sum((p - t) ** 2 for p, t in zip(predicted, target)) / n
+
+    def gradient(
+        self,
+        predicted: Sequence[float],
+        target: Sequence[float],
+        gradient_out: List[float],
+    ) -> None:
+        n = len(predicted)
+        for i, (p, t) in enumerate(zip(predicted, target)):
+            gradient_out[i] = 2.0 * (p - t) / n
+
+    def name(self) -> str:
+        return "MSE"
+
+
+class CrossEntropyLoss(LossFunction):
+    def compute(self, predicted: Sequence[float], target: Sequence[float]) -> float:
+        n = len(predicted)
+        return -sum(
+            t * math.log(max(1e-15, min(1 - 1e-15, p)))
+            for p, t in zip(predicted, target)
