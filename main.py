@@ -1162,3 +1162,100 @@ class MultiRunRunner:
         config: TrainingConfig,
         num_runs: int,
     ) -> None:
+        self.registry = registry
+        self.config = config
+        self.num_runs = num_runs
+
+    def run_all(
+        self,
+        feature_dim: int,
+        target_dim: int,
+        num_samples: int,
+    ) -> List[str]:
+        run_ids: List[str] = []
+        loss_fn = create_loss(self.config.loss_name)
+        for r in range(self.num_runs):
+            seed = self.config.random_seed + r * 9973
+            ds = generate_synthetic_random(num_samples, feature_dim, target_dim, seed)
+            rng = random.Random(seed)
+            model = LinearModel(feature_dim, target_dim, rng)
+            opt = create_optimizer(
+                self.config.optimizer_name,
+                self.config.learning_rate,
+                model.param_count(),
+            )
+            bot = TrainerBot(self.registry, self.config, loss_fn, opt, model, ds)
+            run_id = bot.start_run(f"batch_submitter_{r}")
+            bot.run_training(run_id)
+            run_ids.append(run_id)
+        return run_ids
+
+
+# -----------------------------------------------------------------------------
+# RUN FILTER & STATS
+# -----------------------------------------------------------------------------
+
+
+def filter_runs_by_submitter(registry: RunRegistry, submitter_id: str) -> List[str]:
+    return [
+        rid for rid in registry.get_all_run_ids()
+        if registry.get_run(rid).submitter_id == submitter_id
+    ]
+
+
+def filter_runs_min_epochs(registry: RunRegistry, min_epochs: int) -> List[str]:
+    return [
+        rid for rid in registry.get_all_run_ids()
+        if registry.get_run(rid).epochs_recorded >= min_epochs
+    ]
+
+
+def filter_runs_non_archived(registry: RunRegistry) -> List[str]:
+    return [
+        rid for rid in registry.get_all_run_ids()
+        if not registry.get_run(rid).archived
+    ]
+
+
+def stats_mean(values: List[float]) -> float:
+    if not values:
+        return float("nan")
+    return sum(values) / len(values)
+
+
+def stats_std(values: List[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    m = stats_mean(values)
+    return math.sqrt(sum((x - m) ** 2 for x in values) / (len(values) - 1))
+
+
+def stats_min(values: List[float]) -> float:
+    return min(values) if values else float("nan")
+
+
+def stats_max(values: List[float]) -> float:
+    return max(values) if values else float("nan")
+
+
+# -----------------------------------------------------------------------------
+# CONFIG VALIDATOR
+# -----------------------------------------------------------------------------
+
+
+def validate_config(c: TrainingConfig) -> None:
+    if c.max_epochs <= 0:
+        raise TP88ConfigValidationError("max_epochs")
+    if c.batch_size <= 0:
+        raise TP88ConfigValidationError("batch_size")
+    if c.learning_rate <= 0 or not math.isfinite(c.learning_rate):
+        raise TP88ConfigValidationError("learning_rate")
+    if c.gradient_clip_norm <= 0:
+        raise TP88ConfigValidationError("gradient_clip_norm")
+    if c.checkpoint_every_epochs <= 0:
+        raise TP88ConfigValidationError("checkpoint_every_epochs")
+
+
+# -----------------------------------------------------------------------------
+# RUN ID GENERATOR & HASH UTILS
+# -----------------------------------------------------------------------------
