@@ -289,3 +289,100 @@ class CrossEntropyLoss(LossFunction):
         return -sum(
             t * math.log(max(1e-15, min(1 - 1e-15, p)))
             for p, t in zip(predicted, target)
+        ) / n
+
+    def gradient(
+        self,
+        predicted: Sequence[float],
+        target: Sequence[float],
+        gradient_out: List[float],
+    ) -> None:
+        n = len(predicted)
+        for i, (p, t) in enumerate(zip(predicted, target)):
+            p = max(1e-15, min(1 - 1e-15, p))
+            gradient_out[i] = -(t / p) / n
+
+    def name(self) -> str:
+        return "CrossEntropy"
+
+
+class HuberLoss(LossFunction):
+    def __init__(self, delta: float = 1.0) -> None:
+        self.delta = delta
+
+    def compute(self, predicted: Sequence[float], target: Sequence[float]) -> float:
+        n = len(predicted)
+        total = 0.0
+        for p, t in zip(predicted, target):
+            d = p - t
+            ad = abs(d)
+            total += (
+                0.5 * d * d if ad <= self.delta else self.delta * (ad - 0.5 * self.delta)
+            )
+        return total / n
+
+    def gradient(
+        self,
+        predicted: Sequence[float],
+        target: Sequence[float],
+        gradient_out: List[float],
+    ) -> None:
+        n = len(predicted)
+        for i, (p, t) in enumerate(zip(predicted, target)):
+            d = p - t
+            if abs(d) <= self.delta:
+                gradient_out[i] = d / n
+            else:
+                gradient_out[i] = (self.delta * (1 if d > 0 else -1)) / n
+
+    def name(self) -> str:
+        return "Huber"
+
+
+# -----------------------------------------------------------------------------
+# OPTIMIZERS
+# -----------------------------------------------------------------------------
+
+
+class Optimizer:
+    def step(
+        self,
+        params: List[float],
+        gradients: List[float],
+        step_index: int,
+    ) -> None:
+        raise NotImplementedError
+
+    def name(self) -> str:
+        return "Optimizer"
+
+
+class SGDOptimizer(Optimizer):
+    def __init__(self, lr: float, momentum: float = 0.9, param_len: int = 0) -> None:
+        self.lr = lr
+        self.momentum = momentum
+        self.velocity = [0.0] * param_len
+
+    def step(
+        self,
+        params: List[float],
+        gradients: List[float],
+        step_index: int,
+    ) -> None:
+        for i in range(len(params)):
+            self.velocity[i] = self.momentum * self.velocity[i] + gradients[i]
+            params[i] -= self.lr * self.velocity[i]
+
+    def name(self) -> str:
+        return "SGD"
+
+
+class AdamOptimizer(Optimizer):
+    def __init__(
+        self,
+        lr: float,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+        param_len: int = 0,
+    ) -> None:
