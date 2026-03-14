@@ -968,3 +968,100 @@ class RunComparator:
 
 class MetricsAggregator:
     def __init__(self) -> None:
+        self.history: List[EpochMetrics] = []
+
+    def add(self, m: EpochMetrics) -> None:
+        self.history.append(m)
+
+    def get_best_loss(self) -> float:
+        if not self.history:
+            return float("inf")
+        return min(m.loss for m in self.history)
+
+    def get_last_loss(self) -> float:
+        if not self.history:
+            return float("nan")
+        return self.history[-1].loss
+
+    def get_history(self) -> List[EpochMetrics]:
+        return list(self.history)
+
+
+# -----------------------------------------------------------------------------
+# CHECKPOINT MANAGER
+# -----------------------------------------------------------------------------
+
+
+class CheckpointManager:
+    def __init__(self, base_dir: Union[str, Path], registry: RunRegistry) -> None:
+        self.base_dir = Path(base_dir)
+        self.registry = registry
+
+    def save_checkpoint(
+        self,
+        run_id: str,
+        checkpoint_index: int,
+        model: Model,
+        config: TrainingConfig,
+    ) -> None:
+        dir_path = self.base_dir / run_id
+        dir_path.mkdir(parents=True, exist_ok=True)
+        file_path = dir_path / f"ckpt_{checkpoint_index}.bin"
+        params = model.get_params()
+        with open(file_path, "wb") as f:
+            f.write(struct.pack("i", config.max_epochs))
+            f.write(struct.pack("i", config.batch_size))
+            f.write(struct.pack("i", len(params)))
+            f.write(struct.pack(f"{len(params)}d", *params))
+
+    def load_checkpoint(
+        self,
+        run_id: str,
+        checkpoint_index: int,
+        model: Model,
+    ) -> None:
+        file_path = self.base_dir / run_id / f"ckpt_{checkpoint_index}.bin"
+        if not file_path.exists():
+            raise TP88CheckpointError(f"File not found: {file_path}")
+        with open(file_path, "rb") as f:
+            f.read(4)  # max_epochs
+            f.read(4)  # batch_size
+            n = struct.unpack("i", f.read(4))[0]
+            buf = f.read(n * 8)
+            params = list(struct.unpack(f"{n}d", buf))
+            model.set_params(params)
+
+
+# -----------------------------------------------------------------------------
+# LR SCHEDULER
+# -----------------------------------------------------------------------------
+
+
+class LRScheduler:
+    def get_lr(self, epoch: int, step: int) -> float:
+        raise NotImplementedError
+
+
+class StepLRScheduler(LRScheduler):
+    def __init__(self, initial_lr: float, step_size: int, gamma: float) -> None:
+        self.initial_lr = initial_lr
+        self.step_size = step_size
+        self.gamma = gamma
+
+    def get_lr(self, epoch: int, step: int) -> float:
+        s = epoch * 1000 + step
+        return self.initial_lr * (self.gamma ** (s // self.step_size))
+
+
+class CosineAnnealingScheduler(LRScheduler):
+    def __init__(self, initial_lr: float, total_steps: int) -> None:
+        self.initial_lr = initial_lr
+        self.total_steps = total_steps
+
+    def get_lr(self, epoch: int, step: int) -> float:
+        s = epoch * 1000 + step
+        if s >= self.total_steps:
+            return self.initial_lr * 0.01
+        return 0.5 * self.initial_lr * (1 + math.cos(math.pi * s / self.total_steps))
+
+
