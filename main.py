@@ -580,3 +580,100 @@ class LinearModel(Model):
         input_batch: List[List[float]],
         output_grad: List[List[float]],
         param_grad: List[List[float]],
+    ) -> None:
+        batch = len(input_batch)
+        rows = self.out_dim
+        cols = self.in_dim + 1
+        for r in range(rows):
+            for c in range(cols):
+                param_grad[r][c] = 0.0
+        for b in range(batch):
+            for o in range(self.out_dim):
+                g = output_grad[b][o]
+                for i in range(self.in_dim):
+                    param_grad[o][i] += g * input_batch[b][i]
+                param_grad[o][self.in_dim] += g
+        for o in range(self.out_dim):
+            for i in range(self.in_dim + 1):
+                param_grad[o][i] /= batch
+
+
+# -----------------------------------------------------------------------------
+# LOSS & OPTIMIZER FACTORIES
+# -----------------------------------------------------------------------------
+
+
+def create_loss(name: str, **kwargs: Any) -> LossFunction:
+    if name == "MSE":
+        return MSELoss()
+    if name == "CrossEntropy":
+        return CrossEntropyLoss()
+    if name == "Huber":
+        return HuberLoss(delta=kwargs.get("delta", 1.0))
+    return MSELoss()
+
+
+def create_optimizer(
+    name: str,
+    lr: float,
+    param_len: int,
+    **kwargs: Any,
+) -> Optimizer:
+    if name == "SGD":
+        return SGDOptimizer(lr, momentum=kwargs.get("momentum", 0.9), param_len=param_len)
+    if name == "Adam":
+        return AdamOptimizer(
+            lr,
+            beta1=kwargs.get("beta1", 0.9),
+            beta2=kwargs.get("beta2", 0.999),
+            eps=kwargs.get("eps", 1e-8),
+            param_len=param_len,
+        )
+    if name == "RMSprop":
+        return RMSpropOptimizer(lr, decay=kwargs.get("decay", 0.99), param_len=param_len)
+    return AdamOptimizer(lr, param_len=param_len)
+
+
+# -----------------------------------------------------------------------------
+# TRAINER BOT
+# -----------------------------------------------------------------------------
+
+
+class TrainerBot:
+    def __init__(
+        self,
+        registry: RunRegistry,
+        config: TrainingConfig,
+        loss_fn: LossFunction,
+        optimizer: Optimizer,
+        model: Model,
+        dataset: Dataset,
+    ) -> None:
+        self.registry = registry
+        self.config = config
+        self.loss_fn = loss_fn
+        self.optimizer = optimizer
+        self.model = model
+        self.dataset = dataset
+        self.gradient_clip_norm = config.gradient_clip_norm
+
+    def _hash_config(self, c: TrainingConfig) -> bytes:
+        s = f"{c.max_epochs}|{c.batch_size}|{c.learning_rate}|{c.optimizer_name}|{c.loss_name}"
+        return hashlib.sha256(s.encode()).digest()
+
+    def start_run(self, submitter_id: str) -> str:
+        config_hash = self._hash_config(self.config)
+        return self.registry.register_run(
+            submitter_id,
+            self.config.max_epochs,
+            config_hash,
+        )
+
+    def run_training(self, run_id: str) -> None:
+        r = self.registry.get_run(run_id)
+        batch_size = self.config.batch_size
+        feature_dim = self.dataset.feature_dim()
+        target_dim = self.dataset.target_dim()
+        n_samples = self.dataset.size()
+        batch_count = (n_samples + batch_size - 1) // batch_size
+        batch_features = [[0.0] * feature_dim for _ in range(batch_size)]
