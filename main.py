@@ -1453,3 +1453,100 @@ class ProximaLossRecord:
 class ProximaStepRecorder:
     def __init__(self) -> None:
         self.records: List[ProximaLossRecord] = []
+
+    def record(self, step: int, loss: float) -> None:
+        self.records.append(
+            ProximaLossRecord(step, loss, time.time() * 1000)
+        )
+
+    def get_records(self) -> List[ProximaLossRecord]:
+        return list(self.records)
+
+    def clear(self) -> None:
+        self.records.clear()
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA VALIDATION RESULT & FILE PATHS
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class ProximaValidationResult:
+    epoch: int
+    train_loss: float
+    val_loss: float
+
+
+def proxima_run_dir(base: Union[str, Path], run_id: str) -> Path:
+    return Path(base) / run_id
+
+
+def proxima_epoch_csv_path(base: Union[str, Path], run_id: str) -> Path:
+    return proxima_run_dir(base, run_id) / "epoch_metrics.csv"
+
+
+def proxima_checkpoint_path(
+    base: Union[str, Path],
+    run_id: str,
+    index: int,
+) -> Path:
+    return proxima_run_dir(base, run_id) / f"ckpt_{index}.bin"
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA MEMORY ESTIMATE & SEED HELPERS
+# -----------------------------------------------------------------------------
+
+
+def estimate_param_bytes(param_count: int) -> int:
+    return param_count * 8
+
+
+def estimate_batch_bytes(
+    batch_size: int,
+    feature_dim: int,
+    target_dim: int,
+) -> int:
+    return batch_size * (feature_dim + target_dim) * 8 * 2
+
+
+def seed_from_run_id(run_id: str) -> int:
+    return (hash(run_id) * 31 + id(run_id)) % (2**32)
+
+
+def seed_from_config(c: TrainingConfig) -> int:
+    return (c.random_seed + c.max_epochs * 31 + c.batch_size) % (2**32)
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA RUN ID NORMALIZER
+# -----------------------------------------------------------------------------
+
+
+def normalize_run_id(run_id: Optional[str]) -> str:
+    if run_id is None:
+        return ""
+    s = run_id.strip().lower()
+    if len(s) > TP88_MAX_RUN_ID_LEN:
+        s = s[: TP88_MAX_RUN_ID_LEN]
+    return s
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA PLACEHOLDERS (reserved)
+# -----------------------------------------------------------------------------
+
+
+def proxima_placeholder_version() -> int:
+    return 1
+
+
+def proxima_placeholder_scale() -> float:
+    return 1e-6
+
+
+def proxima_supported_losses() -> List[str]:
+    return ["MSE", "CrossEntropy", "Huber"]
+
+
