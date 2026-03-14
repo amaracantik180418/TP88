@@ -1259,3 +1259,100 @@ def validate_config(c: TrainingConfig) -> None:
 # -----------------------------------------------------------------------------
 # RUN ID GENERATOR & HASH UTILS
 # -----------------------------------------------------------------------------
+
+
+class RunIdGenerator:
+    def __init__(self, prefix: Optional[str] = None) -> None:
+        self.prefix = prefix or TP88_RUN_PREFIX
+        self._counter = 0
+
+    def next_id(self) -> str:
+        self._counter += 1
+        return f"{self.prefix}{self._counter:016x}{int(time.time()*1e6) % (2**24):06x}"
+
+
+def config_hash_bytes(c: TrainingConfig) -> bytes:
+    return hashlib.sha256(config_to_json(c).encode()).digest()
+
+
+def bytes_to_hex(b: bytes) -> str:
+    return b.hex()
+
+
+# -----------------------------------------------------------------------------
+# DATASET SPLIT
+# -----------------------------------------------------------------------------
+
+
+def train_val_split(
+    full: ArrayDataset,
+    val_ratio: float,
+    seed: int,
+) -> Tuple[ArrayDataset, ArrayDataset]:
+    if val_ratio <= 0 or val_ratio >= 1:
+        raise TP88ConfigValidationError("val_ratio")
+    n = full.size()
+    val_size = int(n * val_ratio)
+    train_size = n - val_size
+    fd = full.feature_dim()
+    td = full.target_dim()
+    indices = list(range(n))
+    random.Random(seed).shuffle(indices)
+    train_feat = [[0.0] * fd for _ in range(train_size)]
+    train_tgt = [[0.0] * td for _ in range(train_size)]
+    val_feat = [[0.0] * fd for _ in range(val_size)]
+    val_tgt = [[0.0] * td for _ in range(val_size)]
+    for i in range(train_size):
+        full.get_batch(indices[i], 1, [train_feat[i]], [train_tgt[i]])
+    for i in range(val_size):
+        full.get_batch(indices[train_size + i], 1, [val_feat[i]], [val_tgt[i]])
+    return (
+        ArrayDataset(train_feat, train_tgt, seed),
+        ArrayDataset(val_feat, val_tgt, seed + 1),
+    )
+
+
+# -----------------------------------------------------------------------------
+# EPOCH RECORD HELPERS
+# -----------------------------------------------------------------------------
+
+
+def epoch_record_min_loss(records: List[EpochRecord]) -> float:
+    if not records:
+        return float("nan")
+    return min(r.loss for r in records)
+
+
+def epoch_record_max_loss(records: List[EpochRecord]) -> float:
+    if not records:
+        return float("nan")
+    return max(r.loss for r in records)
+
+
+def epoch_record_avg_loss(records: List[EpochRecord]) -> float:
+    if not records:
+        return float("nan")
+    return sum(r.loss for r in records) / len(records)
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA RUN STATUS
+# -----------------------------------------------------------------------------
+
+
+class ProximaRunStatus:
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"
+    FAILED = "failed"
+
+
+def resolve_run_status(registry: RunRegistry, run_id: str) -> str:
+    try:
+        r = registry.get_run(run_id)
+        if r.archived:
+            return ProximaRunStatus.ARCHIVED
+        recorded = r.epochs_recorded
+        if recorded == 0:
+            return ProximaRunStatus.PENDING
