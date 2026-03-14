@@ -483,3 +483,100 @@ class Dataset:
 
 class ArrayDataset(Dataset):
     def __init__(
+        self,
+        features: List[List[float]],
+        targets: List[List[float]],
+        seed: int = 0,
+    ) -> None:
+        if len(features) != len(targets) or len(features) == 0:
+            raise TP88DatasetEmptyError()
+        self.features = features
+        self.targets = targets
+        self.rng = random.Random(seed)
+
+    def size(self) -> int:
+        return len(self.features)
+
+    def feature_dim(self) -> int:
+        return len(self.features[0])
+
+    def target_dim(self) -> int:
+        return len(self.targets[0])
+
+    def get_batch(
+        self,
+        start_idx: int,
+        count: int,
+        features_out: List[List[float]],
+        targets_out: List[List[float]],
+    ) -> None:
+        n = min(count, len(self.features) - start_idx)
+        for i in range(n):
+            features_out[i][:] = self.features[start_idx + i]
+            targets_out[i][:] = self.targets[start_idx + i]
+
+    def shuffled_indices(self) -> List[int]:
+        idx = list(range(len(self.features)))
+        self.rng.shuffle(idx)
+        return idx
+
+
+# -----------------------------------------------------------------------------
+# MODEL (simple linear)
+# -----------------------------------------------------------------------------
+
+
+class Model:
+    def forward(self, input_batch: List[List[float]], output_batch: List[List[float]]) -> None:
+        raise NotImplementedError
+
+    def backward(
+        self,
+        input_batch: List[List[float]],
+        output_grad: List[List[float]],
+        param_grad: List[List[float]],
+    ) -> None:
+        raise NotImplementedError
+
+    def get_params(self) -> List[float]:
+        raise NotImplementedError
+
+    def set_params(self, params: Sequence[float]) -> None:
+        raise NotImplementedError
+
+    def param_count(self) -> int:
+        raise NotImplementedError
+
+
+class LinearModel(Model):
+    def __init__(self, in_dim: int, out_dim: int, rng: random.Random) -> None:
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        param_len = out_dim * (in_dim + 1)
+        scale = 1.0 / math.sqrt(in_dim + 1)
+        self.params = [(rng.random() * 2 - 1) * scale for _ in range(param_len)]
+
+    def param_count(self) -> int:
+        return len(self.params)
+
+    def get_params(self) -> List[float]:
+        return list(self.params)
+
+    def set_params(self, params: Sequence[float]) -> None:
+        self.params[:] = params[: len(self.params)]
+
+    def forward(self, input_batch: List[List[float]], output_batch: List[List[float]]) -> None:
+        batch = len(input_batch)
+        for b in range(batch):
+            for o in range(self.out_dim):
+                base = o * (self.in_dim + 1)
+                s = self.params[base + self.in_dim]
+                for i in range(self.in_dim):
+                    s += input_batch[b][i] * self.params[base + i]
+                output_batch[b][o] = s
+
+    def backward(
+        self,
+        input_batch: List[List[float]],
+        output_grad: List[List[float]],
+        param_grad: List[List[float]],
