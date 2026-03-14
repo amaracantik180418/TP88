@@ -1065,3 +1065,100 @@ class CosineAnnealingScheduler(LRScheduler):
         return 0.5 * self.initial_lr * (1 + math.cos(math.pi * s / self.total_steps))
 
 
+# -----------------------------------------------------------------------------
+# TRAINING CALLBACKS
+# -----------------------------------------------------------------------------
+
+
+class TrainingCallback:
+    def on_epoch_start(self, run_id: str, epoch: int) -> None:
+        pass
+
+    def on_epoch_end(self, run_id: str, epoch: int, metrics: EpochMetrics) -> None:
+        pass
+
+    def on_checkpoint(self, run_id: str, checkpoint_index: int) -> None:
+        pass
+
+    def on_run_complete(self, run_id: str) -> None:
+        pass
+
+
+class LoggingCallback(TrainingCallback):
+    def __init__(self, logger: TP88Logger) -> None:
+        self.logger = logger
+
+    def on_epoch_start(self, run_id: str, epoch: int) -> None:
+        self.logger.info(f"Epoch start: {epoch}")
+
+    def on_epoch_end(self, run_id: str, epoch: int, metrics: EpochMetrics) -> None:
+        self.logger.info(str(metrics))
+
+    def on_checkpoint(self, run_id: str, checkpoint_index: int) -> None:
+        self.logger.info(f"Checkpoint: {checkpoint_index}")
+
+    def on_run_complete(self, run_id: str) -> None:
+        self.logger.info(f"Run complete: {run_id}")
+
+
+class CompositeCallback(TrainingCallback):
+    def __init__(self) -> None:
+        self.callbacks: List[TrainingCallback] = []
+
+    def add(self, c: TrainingCallback) -> None:
+        self.callbacks.append(c)
+
+    def on_epoch_start(self, run_id: str, epoch: int) -> None:
+        for c in self.callbacks:
+            c.on_epoch_start(run_id, epoch)
+
+    def on_epoch_end(self, run_id: str, epoch: int, metrics: EpochMetrics) -> None:
+        for c in self.callbacks:
+            c.on_epoch_end(run_id, epoch, metrics)
+
+    def on_checkpoint(self, run_id: str, checkpoint_index: int) -> None:
+        for c in self.callbacks:
+            c.on_checkpoint(run_id, checkpoint_index)
+
+    def on_run_complete(self, run_id: str) -> None:
+        for c in self.callbacks:
+            c.on_run_complete(run_id)
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA REPORTER
+# -----------------------------------------------------------------------------
+
+
+class ProximaReporter:
+    def __init__(self, registry: RunRegistry, logger: TP88Logger) -> None:
+        self.registry = registry
+        self.logger = logger
+
+    def report_run(self, run_id: str) -> None:
+        r = self.registry.get_run(run_id)
+        self.logger.info(f"Run {run_id} submitter={r.submitter_id} epochs={r.epoch_count}")
+        epochs = self.registry.get_epochs(run_id)
+        if epochs:
+            first_loss = epochs[0].loss
+            last_loss = epochs[-1].loss
+            self.logger.info(f"  first loss={first_loss} last loss={last_loss}")
+        self.logger.info(f"  checkpoints={len(self.registry.get_checkpoints(run_id))}")
+
+    def report_all_runs(self) -> None:
+        for rid in self.registry.get_all_run_ids():
+            self.report_run(rid)
+
+
+# -----------------------------------------------------------------------------
+# MULTI-RUN RUNNER
+# -----------------------------------------------------------------------------
+
+
+class MultiRunRunner:
+    def __init__(
+        self,
+        registry: RunRegistry,
+        config: TrainingConfig,
+        num_runs: int,
+    ) -> None:
