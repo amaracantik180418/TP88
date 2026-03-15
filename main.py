@@ -1744,3 +1744,94 @@ def tp88_major_version() -> int:
     return TP88_MAJOR
 
 
+def tp88_minor_version() -> int:
+    return TP88_MINOR
+
+
+def summaries_for_all_runs(registry: RunRegistry) -> List[RunSummary]:
+    return [RunSummary.from_registry(registry, rid) for rid in registry.get_all_run_ids()]
+
+
+def best_run_id_from_summaries(summaries: List[RunSummary]) -> Optional[str]:
+    if not summaries:
+        return None
+    return min(summaries, key=lambda s: s.final_loss).run_id
+
+
+def run_exists(registry: RunRegistry, run_id: str) -> bool:
+    try:
+        registry.get_run(run_id)
+        return True
+    except TP88RunNotFoundError:
+        return False
+
+
+def archive_run_safe(registry: RunRegistry, run_id: str) -> None:
+    try:
+        registry.archive_run(run_id)
+    except Exception:
+        pass
+
+
+def epoch_count_for_run(registry: RunRegistry, run_id: str) -> int:
+    return len(registry.get_epochs(run_id))
+
+
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
+
+
+def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="TP88 - AI Training Software Bot")
+    p.add_argument("--max-epochs", type=int, default=47, help="Max epochs")
+    p.add_argument("--batch-size", type=int, default=16, help="Batch size")
+    p.add_argument("--learning-rate", type=float, default=0.0012, help="Learning rate")
+    p.add_argument("--feature-dim", type=int, default=8, help="Feature dimension")
+    p.add_argument("--target-dim", type=int, default=2, help="Target dimension")
+    p.add_argument("--num-samples", type=int, default=640, help="Number of samples")
+    p.add_argument("--seed", type=int, default=TP88_SEED_BASE + 8821, help="Random seed")
+    p.add_argument("--optimizer", type=str, default="Adam", help="Optimizer name")
+    p.add_argument("--loss", type=str, default="MSE", help="Loss name")
+    p.add_argument("--export-dir", type=str, default="", help="Export CSV to directory")
+    return p.parse_args(args)
+
+
+def main(args: Optional[List[str]] = None) -> int:
+    opts = parse_args(args)
+    registry = RunRegistry()
+    config = TrainingConfig(
+        max_epochs=opts.max_epochs,
+        batch_size=opts.batch_size,
+        learning_rate=opts.learning_rate,
+        random_seed=opts.seed,
+        optimizer_name=opts.optimizer,
+        loss_name=opts.loss,
+    )
+    rng = random.Random(config.random_seed)
+    features = [[rng.random() * 2 - 1 for _ in range(opts.feature_dim)] for _ in range(opts.num_samples)]
+    targets = [[rng.random() for _ in range(opts.target_dim)] for _ in range(opts.num_samples)]
+    dataset = ArrayDataset(features, targets, config.random_seed)
+    model = LinearModel(opts.feature_dim, opts.target_dim, rng)
+    optimizer = create_optimizer(config.optimizer_name, config.learning_rate, model.param_count())
+    loss_fn = create_loss(config.loss_name)
+    bot = TrainerBot(registry, config, loss_fn, optimizer, model, dataset)
+    run_id = bot.start_run("tp88_cli_submitter")
+    logger = TP88Logger(run_id)
+    logger.info(f"Run started: {run_id}")
+    bot.run_training(run_id)
+    logger.info(f"Run finished. Total runs: {registry.total_runs()}")
+    epochs = registry.get_epochs(run_id)
+    logger.info(f"Epochs recorded: {len(epochs)}")
+    checkpoints = registry.get_checkpoints(run_id)
+    logger.info(f"Checkpoints anchored: {len(checkpoints)}")
+    if opts.export_dir:
+        export_dir = Path(opts.export_dir)
+        export_epochs_csv(registry, run_id, export_dir / f"{run_id}_epochs.csv")
+        export_checkpoints_csv(registry, run_id, export_dir / f"{run_id}_checkpoints.csv")
+        logger.info(f"Exported to {export_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
