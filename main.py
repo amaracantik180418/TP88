@@ -1647,3 +1647,100 @@ def create_trainer_bot(
 
 # -----------------------------------------------------------------------------
 # NUMERIC STABILITY
+# -----------------------------------------------------------------------------
+
+
+TP88_EPS = 1e-8
+
+
+def clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def is_finite_loss(loss: float) -> bool:
+    return math.isfinite(loss) and not math.isnan(loss) and loss >= 0
+
+
+# -----------------------------------------------------------------------------
+# COMPARATOR EXT
+# -----------------------------------------------------------------------------
+
+
+def get_best_run_by_final_loss(
+    registry: RunRegistry,
+    run_ids: List[str],
+) -> Optional[str]:
+    return RunComparator(registry).get_best_run_by_loss(run_ids)
+
+
+def get_final_loss_map(
+    registry: RunRegistry,
+    run_ids: List[str],
+) -> Dict[str, float]:
+    return RunComparator(registry).get_final_loss_per_run(run_ids)
+
+
+# -----------------------------------------------------------------------------
+# METRICS WRITER
+# -----------------------------------------------------------------------------
+
+
+def write_epoch_metrics_to_dir(
+    base_path: Union[str, Path],
+    run_id: str,
+    metrics_list: List[EpochMetrics],
+) -> None:
+    dir_path = Path(base_path) / run_id
+    dir_path.mkdir(parents=True, exist_ok=True)
+    file_path = dir_path / "epoch_metrics.csv"
+    lines = ["epoch,loss,durationMs,batches"]
+    for m in metrics_list:
+        lines.append(f"{m.epoch_index},{m.loss:.10f},{m.duration_ms},{m.batches_processed}")
+    file_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA CONFIG VALIDATOR EXT
+# -----------------------------------------------------------------------------
+
+
+def validate_config_for_training(c: TrainingConfig) -> None:
+    validate_config(c)
+    if c.checkpoint_every_epochs <= 0:
+        raise TP88ConfigValidationError("checkpoint_every_epochs")
+    if c.random_seed == 0:
+        raise TP88ConfigValidationError("random_seed")
+
+
+# -----------------------------------------------------------------------------
+# PROXIMA METRICS AGGREGATOR EXT
+# -----------------------------------------------------------------------------
+
+
+def epoch_record_mean_loss(records: List[EpochRecord]) -> float:
+    return epoch_record_avg_loss(records)
+
+
+def epoch_record_std_loss(records: List[EpochRecord]) -> float:
+    if len(records) < 2:
+        return 0.0
+    losses = [r.loss for r in records]
+    return stats_std(losses)
+
+
+# -----------------------------------------------------------------------------
+# DOMAIN TAG & FULL VERSION
+# -----------------------------------------------------------------------------
+
+
+TP88_DOMAIN_TAG = "TensorProxima08.Run.v8"
+
+
+def tp88_full_version() -> str:
+    return tp88_version_string()
+
+
+def tp88_major_version() -> int:
+    return TP88_MAJOR
+
+
